@@ -22,7 +22,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ****************************************************************************/
 
-#include <avr/io.h>      
+#include <avr/io.h>
 #include <string.h>
 #include <avr/interrupt.h>   // Interrupts and timers
 #include <util/delay.h>      // Blocking delay functions
@@ -71,21 +71,24 @@ uint8_t intTimeZoneMin = 0;
 uint8_t display[DISPLAYSIZE]; // stores segments, not values!
 uint8_t currdigit = 0;        // which digit we are currently multiplexing
 
+uint8_t lastdigit = DISPLAYSIZE-1;  // last digit before starting over
+volatile uint8_t ldbb = 2;  // Last Digit Brightness Boost
+
 // This table allow us to index between what digit we want to light up
 // and what the pin number is on the MAX6921 see the .h for values.
 // Stored in ROM (PROGMEM) to save RAM
 const uint8_t digittable[] PROGMEM = {
   DIG_9, DIG_8, DIG_7, DIG_6, DIG_5, DIG_4, DIG_3, DIG_2, DIG_1
 };
-PGM_P digittable_p PROGMEM = digittable;
+PGM_P const digittable_p PROGMEM = digittable;
 
 // This table allow us to index between what segment we want to light up
 // and what the pin number is on the MAX6921 see the .h for values.
 // Stored in ROM (PROGMEM) to save RAM
 const uint8_t segmenttable[] PROGMEM = {
-  SEG_H, SEG_G,  SEG_F,  SEG_E,  SEG_D,  SEG_C,  SEG_B,  SEG_A 
+  SEG_H, SEG_G,  SEG_F,  SEG_E,  SEG_D,  SEG_C,  SEG_B,  SEG_A
 };
-PGM_P segmenttable_p PROGMEM = segmenttable;
+PGM_P const segmenttable_p PROGMEM = segmenttable;
 
 // muxdiv and MUX_DIVIDER divides down a high speed interrupt (31.25KHz)
 // down so that we can refresh at about 100Hz (31.25KHz / 300)
@@ -125,9 +128,9 @@ void setsnooze(void) {
   displaymode = SHOW_TIME;
 }
 
-// we reset the watchdog timer 
+// we reset the watchdog timer
 void kickthedog(void) {
-  
+
   wdt_reset();
 
 }
@@ -150,9 +153,11 @@ SIGNAL (SIG_OVERFLOW0) {
   // ok its not really 1ms but its like within 10% :)
   milliseconds++;
 
-  // Cycle through each digit in the display
-  if (currdigit >= DISPLAYSIZE)
-    currdigit = 0;
+  // currdigit is allowed to go past the end of display bytes.
+  // setdisplay will limit the max index value
+  // this has the effect of displaying the last digit multiple times
+  if (currdigit > lastdigit+ldbb)  // hack to display last digit twice - wbp
+    currdigit = 0;  // start over with first digit
 
   // Set the current display's segments
   setdisplay(currdigit, display[currdigit]);
@@ -182,13 +187,13 @@ SIGNAL (SIG_OVERFLOW0) {
       TCCR1B |= _BV(CS11); // turn buzzer on!
     }
   }
-  
+
 }
 
 
 // We use the pin change interrupts to detect when buttons are pressed
 
-// These store the current button states for all 3 buttons. We can 
+// These store the current button states for all 3 buttons. We can
 // then query whether the buttons are pressed and released or pressed
 // This allows for 'high speed incrementing' when setting the time
 volatile uint8_t last_buttonstate = 0, just_pressed = 0, pressed = 0;
@@ -305,7 +310,7 @@ SIGNAL (TIMER2_OVF_vect) {
   // If we're in low power mode we should get out now since the display is off
   if (sleepmode)
     return;
-   
+
 
   if (displaymode == SHOW_TIME) {
     if (timeunknown && (time_s % 2)) {
@@ -315,9 +320,9 @@ SIGNAL (TIMER2_OVF_vect) {
     }
     if (alarm_on)
       display[0] |= 0x2;
-    else 
+    else
       display[0] &= ~0x2;
-    
+
   }
 
   check_alarm(time_h, time_m, time_s);
@@ -328,7 +333,7 @@ SIGNAL (TIMER2_OVF_vect) {
     buttonholdcounter--;
   if (snoozetimer) {
     snoozetimer--;
-    if (snoozetimer % 2) 
+    if (snoozetimer % 2)
       display[0] |= 0x2;
     else
       display[0] &= ~0x2;
@@ -374,7 +379,7 @@ SIGNAL(SIG_COMPARATOR) {
 	eeprom_write_byte((uint8_t *)EE_MIN, time_m);
 	eeprom_write_byte((uint8_t *)EE_SEC, time_s);
       }
-      DEBUGP("WAKERESET"); 
+      DEBUGP("WAKERESET");
       app_start();
     }
   }
@@ -390,7 +395,7 @@ void gotosleep(void) {
   //if (sleepmode) //already asleep?
   //  return;
   //DEBUGP("sleeptime");
-  
+
   sleepmode = 1;
   VFDSWITCH_PORT |= _BV(VFDSWITCH); // turn off display
   SPCR  &= ~_BV(SPE); // turn off spi
@@ -405,8 +410,8 @@ void gotosleep(void) {
   //beep(1760, 1);
   //beep(880, 1);
   // turn beeper off
-  PORTB &= ~_BV(SPK1) & ~_BV(SPK2); 
-  
+  PORTB &= ~_BV(SPK1) & ~_BV(SPK2);
+
   // turn off pullups
   PORTD &= ~_BV(BUTTON1) & ~_BV(BUTTON3);
   PORTB &= ~_BV(BUTTON2);
@@ -414,21 +419,21 @@ void gotosleep(void) {
   DDRB &= ~_BV(BUTTON2);
   ALARM_PORT &= ~_BV(ALARM);
   ALARM_DDR &= ~_BV(ALARM);
-  
+
 
   // reduce the clock speed
   CLKPR = _BV(CLKPCE);
   CLKPR = _BV(CLKPS3);
-  
+
   //  PPR |= _BV(PRUSART0) | _BV(PRADC) | _BV(PRSPI) | _BV(PRTIM1) | _BV(PRTIM0) | _BV(PRTWI);
   PORTC |= _BV(4);  // sleep signal
   SMCR |= _BV(SM1) | _BV(SM0) | _BV(SE); // sleep mode
-  asm("sleep"); 
+  asm("sleep");
   CLKPR = _BV(CLKPCE);
   CLKPR = 0;
   PORTC &= ~_BV(4);
 }
- 
+
  void wakeup(void) {
    if (!sleepmode)
      return;
@@ -439,9 +444,9 @@ void gotosleep(void) {
    // plugged in
    // wait to verify
    _delay_ms(20);
-   if (ACSR & _BV(ACO)) 
+   if (ACSR & _BV(ACO))
      return;
-   
+
    // turn on pullups
    initbuttons();
 
@@ -452,10 +457,10 @@ void gotosleep(void) {
    vfd_init();
 
    // turn on display
-   VFDSWITCH_PORT &= ~_BV(VFDSWITCH); 
+   VFDSWITCH_PORT &= ~_BV(VFDSWITCH);
    VFDBLANK_PORT &= ~_BV(VFDBLANK);
    volume = eeprom_read_byte((uint8_t *)EE_VOLUME); // reset
-   
+
    speaker_init();
 
    kickthedog();
@@ -480,7 +485,7 @@ void initbuttons(void) {
 
     PCICR = _BV(PCIE0) | _BV(PCIE2);
     PCMSK0 = _BV(PCINT0);
-    PCMSK2 = _BV(PCINT21) | _BV(PCINT20);    
+    PCMSK2 = _BV(PCINT21) | _BV(PCINT20);
 }
 
 
@@ -515,7 +520,7 @@ int main(void) {
   restored = 0;
 
   // setup uart
-  uart_init(BRRL_4800);
+  uart_init(BRRL_9600);
 
   //DEBUGP("VFD Clock");
   DEBUGP("!");
@@ -533,29 +538,29 @@ int main(void) {
     // hmm we should not interrupt here
     ACSR |= _BV(ACI);
 
-    // even in low power mode, we run the clock 
+    // even in low power mode, we run the clock
     DEBUGP("clock init");
-    clock_init();  
+    clock_init();
 
   } else {
     // we aren't in low power mode so init stuff
 
     // init IOs
     initbuttons();
-    
+
     VFDSWITCH_PORT &= ~_BV(VFDSWITCH);
-    
+
     DEBUGP("turning on buttons");
     // set up button interrupts
     DEBUGP("turning on alarmsw");
     // set off an interrupt if alarm is set or unset
     EICRA = _BV(ISC00);
     EIMSK = _BV(INT0);
-  
+
     displaymode = SHOW_TIME;
     DEBUGP("vfd init");
     vfd_init();
-    
+
     DEBUGP("boost init");
     boost_init(eeprom_read_byte((uint8_t *)EE_BRIGHT));
     sei();
@@ -570,14 +575,14 @@ int main(void) {
       intTimeZoneMin = 0;
 
     region = eeprom_read_byte((uint8_t *)EE_REGION);
-    
+
     DEBUGP("speaker init");
     speaker_init();
 
     beep(4000, 1);
 
     DEBUGP("clock init");
-    clock_init();  
+    clock_init();
 
     DEBUGP("alarm init");
     setalarmstate();
@@ -654,7 +659,7 @@ int main(void) {
       delayms(1500);
       kickthedog();
 
-      displaymode = SHOW_TIME;     
+      displaymode = SHOW_TIME;
     }
 
     //Check to see if GPS data is ready:
@@ -662,40 +667,40 @@ int main(void) {
        getgpstime();
 
     }
- 
+
   }
 }
 
 /**************************** SUB-MENUS *****************************/
 
-void set_alarm(void) 
+void set_alarm(void)
 {
   uint8_t mode;
   uint8_t hour, min, sec;
-    
+
   hour = min = sec = 0;
   mode = SHOW_MENU;
 
   hour = alarm_h;
   min = alarm_m;
   sec = 0;
-  
+
   timeoutcounter = INACTIVITYTIMEOUT;
-  
+
   while (1) {
     if (just_pressed & 0x1) { // mode change
       return;
     }
     if (just_pressed || pressed) {
-      timeoutcounter = INACTIVITYTIMEOUT;  
+      timeoutcounter = INACTIVITYTIMEOUT;
       // timeout w/no buttons pressed after 3 seconds?
     } else if (!timeoutcounter) {
       //timed out!
-      displaymode = SHOW_TIME;     
+      displaymode = SHOW_TIME;
       alarm_h = hour;
       alarm_m = min;
-      eeprom_write_byte((uint8_t *)EE_ALARM_HOUR, alarm_h);    
-      eeprom_write_byte((uint8_t *)EE_ALARM_MIN, alarm_m);    
+      eeprom_write_byte((uint8_t *)EE_ALARM_HOUR, alarm_h);
+      eeprom_write_byte((uint8_t *)EE_ALARM_MIN, alarm_m);
       return;
     }
     if (just_pressed & 0x2) {
@@ -705,7 +710,7 @@ void set_alarm(void)
 	mode = SET_HOUR;
 	display_alarm(hour, min);
 	display[1] |= 0x1;
-	display[2] |= 0x1;	
+	display[2] |= 0x1;
       } else if (mode == SET_HOUR) {
 	mode = SET_MIN;
 	display_alarm(hour, min);
@@ -715,8 +720,8 @@ void set_alarm(void)
 	// done!
 	alarm_h = hour;
 	alarm_m = min;
-	eeprom_write_byte((uint8_t *)EE_ALARM_HOUR, alarm_h);    
-	eeprom_write_byte((uint8_t *)EE_ALARM_MIN, alarm_m);    
+	eeprom_write_byte((uint8_t *)EE_ALARM_HOUR, alarm_h);
+	eeprom_write_byte((uint8_t *)EE_ALARM_MIN, alarm_m);
 	displaymode = SHOW_TIME;
 	return;
       }
@@ -743,28 +748,28 @@ void set_alarm(void)
   }
 }
 
-void set_time(void) 
+void set_time(void)
 {
   uint8_t mode;
   uint8_t hour, min, sec;
-    
+
   hour = time_h;
   min = time_m;
   sec = time_s;
   mode = SHOW_MENU;
 
   timeoutcounter = INACTIVITYTIMEOUT;
-  
+
   while (1) {
     if (just_pressed & 0x1) { // mode change
       return;
     }
     if (just_pressed || pressed) {
-      timeoutcounter = INACTIVITYTIMEOUT;  
+      timeoutcounter = INACTIVITYTIMEOUT;
       // timeout w/no buttons pressed after 3 seconds?
     } else if (!timeoutcounter) {
       //timed out!
-      displaymode = SHOW_TIME;     
+      displaymode = SHOW_TIME;
       return;
     }
     if (just_pressed & 0x2) {
@@ -778,7 +783,7 @@ void set_time(void)
 	mode = SET_HOUR;
 	display_time(hour, min, sec);
 	display[1] |= 0x1;
-	display[2] |= 0x1;	
+	display[2] |= 0x1;
       } else if (mode == SET_HOUR) {
 	mode = SET_MIN;
 	display_time(hour, min, sec);
@@ -800,14 +805,14 @@ void set_time(void)
     }
     if ((just_pressed & 0x4) || (pressed & 0x4)) {
       just_pressed = 0;
-      
+
       if (mode == SET_HOUR) {
 	hour = (hour+1) % 24;
 	display_time(hour, min, sec);
 	display[1] |= 0x1;
 	display[2] |= 0x1;
 	time_h = hour;
-	eeprom_write_byte((uint8_t *)EE_HOUR, time_h);    
+	eeprom_write_byte((uint8_t *)EE_HOUR, time_h);
       }
       if (mode == SET_MIN) {
 	min = (min+1) % 60;
@@ -824,7 +829,7 @@ void set_time(void)
 	display[8] |= 0x1;
 	time_s = sec;
       }
-      
+
       if (pressed & 0x4)
 	delayms(75);
     }
@@ -836,15 +841,15 @@ void set_time(void)
 void set_date(void) {
   uint8_t mode = SHOW_MENU;
 
-  timeoutcounter = INACTIVITYTIMEOUT;;  
+  timeoutcounter = INACTIVITYTIMEOUT;;
 
   while (1) {
     if (just_pressed || pressed) {
-      timeoutcounter = INACTIVITYTIMEOUT;;  
+      timeoutcounter = INACTIVITYTIMEOUT;;
       // timeout w/no buttons pressed after 3 seconds?
     } else if (!timeoutcounter) {
       //timed out!
-      displaymode = SHOW_TIME;     
+      displaymode = SHOW_TIME;
       return;
     }
     if (just_pressed & 0x1) { // mode change
@@ -902,7 +907,7 @@ void set_date(void) {
 	  display[4] |= 0x1;
 	  display[5] |= 0x1;
 	}
-	eeprom_write_byte((uint8_t *)EE_MONTH, date_m);    
+	eeprom_write_byte((uint8_t *)EE_MONTH, date_m);
       }
       if (mode == SET_DAY) {
 	date_d++;
@@ -917,7 +922,7 @@ void set_date(void) {
 	  display[4] |= 0x1;
 	  display[5] |= 0x1;
 	}
-	eeprom_write_byte((uint8_t *)EE_DAY, date_d);    
+	eeprom_write_byte((uint8_t *)EE_DAY, date_d);
       }
       if (mode == SET_YEAR) {
 	date_y++;
@@ -925,7 +930,7 @@ void set_date(void) {
 	display_date(DATE);
 	display[7] |= 0x1;
 	display[8] |= 0x1;
-	eeprom_write_byte((uint8_t *)EE_YEAR, date_y);    
+	eeprom_write_byte((uint8_t *)EE_YEAR, date_y);
       }
 
       if (pressed & 0x4)
@@ -946,11 +951,11 @@ void set_timezone(void) {
       return;
     }
     if (just_pressed || pressed) {
-      timeoutcounter = INACTIVITYTIMEOUT;  
+      timeoutcounter = INACTIVITYTIMEOUT;
       // timeout w/no buttons pressed after 3 seconds?
     } else if (!timeoutcounter) {
       //timed out!
-      displaymode = SHOW_TIME;     
+      displaymode = SHOW_TIME;
       return;
     }
     if (just_pressed & 0x2) {
@@ -960,7 +965,7 @@ void set_timezone(void) {
 	mode = SET_HOUR;
 	display_timezone(hour, min);
 	display[1] |= 0x1;
-	display[2] |= 0x1;	
+	display[2] |= 0x1;
       } else if (mode == SET_HOUR) {
 	mode = SET_MIN;
 	display_timezone(hour, min);
@@ -974,7 +979,7 @@ void set_timezone(void) {
     }
     if ((just_pressed & 0x4) || (pressed & 0x4)) {
       just_pressed = 0;
-      
+
       if (mode == SET_HOUR) {
 	hour = ( ( hour + 1 + 12 ) % 25 ) - 12;
 	display_timezone(hour, min);
@@ -994,7 +999,7 @@ void set_timezone(void) {
         intTimeZoneMin = min;
 	eeprom_write_byte((uint8_t *)EE_ZONE_MIN, min);
       }
-      
+
       if (pressed & 0x4)
 	delayms(75);
     }
@@ -1005,16 +1010,16 @@ void set_brightness(void) {
   uint8_t mode = SHOW_MENU;
   uint8_t brightness;
 
-  timeoutcounter = INACTIVITYTIMEOUT;;  
+  timeoutcounter = INACTIVITYTIMEOUT;;
   brightness = eeprom_read_byte((uint8_t *)EE_BRIGHT);
 
   while (1) {
     if (just_pressed || pressed) {
-      timeoutcounter = INACTIVITYTIMEOUT;;  
+      timeoutcounter = INACTIVITYTIMEOUT;;
       // timeout w/no buttons pressed after 3 seconds?
     } else if (!timeoutcounter) {
       //timed out!
-      displaymode = SHOW_TIME;     
+      displaymode = SHOW_TIME;
       eeprom_write_byte((uint8_t *)EE_BRIGHT, brightness);
       return;
     }
@@ -1031,7 +1036,7 @@ void set_brightness(void) {
 	display_str("brite ");
 	display[7] = pgm_read_byte(numbertable_p + (brightness / 10)) | 0x1;
 	display[8] = pgm_read_byte(numbertable_p + (brightness % 10)) | 0x1;
-      } else {	
+      } else {
 	displaymode = SHOW_TIME;
 	eeprom_write_byte((uint8_t *)EE_BRIGHT, brightness);
 	return;
@@ -1046,7 +1051,7 @@ void set_brightness(void) {
 	display[7] = pgm_read_byte(numbertable_p + (brightness / 10)) | 0x1;
 	display[8] = pgm_read_byte(numbertable_p + (brightness % 10)) | 0x1;
 	if (brightness <= 30) {
-	  OCR0A = 30; 
+	  OCR0A = 30;
 	} else if (brightness <= 35) {
 	  OCR0A = 35;
 	} else if (brightness <= 40) {
@@ -1084,16 +1089,16 @@ void set_volume(void) {
   uint8_t mode = SHOW_MENU;
   uint8_t volume;
 
-  timeoutcounter = INACTIVITYTIMEOUT;;  
+  timeoutcounter = INACTIVITYTIMEOUT;;
   volume = eeprom_read_byte((uint8_t *)EE_VOLUME);
 
   while (1) {
     if (just_pressed || pressed) {
-      timeoutcounter = INACTIVITYTIMEOUT;;  
+      timeoutcounter = INACTIVITYTIMEOUT;;
       // timeout w/no buttons pressed after 3 seconds?
     } else if (!timeoutcounter) {
       //timed out!
-      displaymode = SHOW_TIME;     
+      displaymode = SHOW_TIME;
       return;
     }
     if (just_pressed & 0x1) { // mode change
@@ -1114,7 +1119,7 @@ void set_volume(void) {
 	display[6] |= 0x1;
 	display[7] |= 0x1;
 	display[8] |= 0x1;
-      } else {	
+      } else {
 	displaymode = SHOW_TIME;
 	return;
       }
@@ -1146,16 +1151,16 @@ void set_volume(void) {
 void set_region(void) {
   uint8_t mode = SHOW_MENU;
 
-  timeoutcounter = INACTIVITYTIMEOUT;;  
+  timeoutcounter = INACTIVITYTIMEOUT;;
   region = eeprom_read_byte((uint8_t *)EE_REGION);
 
   while (1) {
     if (just_pressed || pressed) {
-      timeoutcounter = INACTIVITYTIMEOUT;;  
+      timeoutcounter = INACTIVITYTIMEOUT;;
       // timeout w/no buttons pressed after 3 seconds?
     } else if (!timeoutcounter) {
       //timed out!
-      displaymode = SHOW_TIME;     
+      displaymode = SHOW_TIME;
       return;
     }
     if (just_pressed & 0x1) { // mode change
@@ -1172,7 +1177,7 @@ void set_region(void) {
 	} else {
 	  display_str("eur-24hr");
 	}
-      } else {	
+      } else {
 	displaymode = SHOW_TIME;
 	return;
       }
@@ -1198,16 +1203,16 @@ void set_snooze(void) {
   uint8_t mode = SHOW_MENU;
   uint8_t snooze;
 
-  timeoutcounter = INACTIVITYTIMEOUT;;  
+  timeoutcounter = INACTIVITYTIMEOUT;;
   snooze = eeprom_read_byte((uint8_t *)EE_SNOOZE);
 
   while (1) {
     if (just_pressed || pressed) {
-      timeoutcounter = INACTIVITYTIMEOUT;;  
+      timeoutcounter = INACTIVITYTIMEOUT;;
       // timeout w/no buttons pressed after 3 seconds?
     } else if (!timeoutcounter) {
       //timed out!
-      displaymode = SHOW_TIME;     
+      displaymode = SHOW_TIME;
       return;
     }
     if (just_pressed & 0x1) { // mode change
@@ -1223,7 +1228,7 @@ void set_snooze(void) {
 	display_str("   minut");
 	display[1] = pgm_read_byte(numbertable_p + (snooze / 10)) | 0x1;
 	display[2] = pgm_read_byte(numbertable_p + (snooze % 10)) | 0x1;
-      } else { 
+      } else {
 	displaymode = SHOW_TIME;
 	return;
       }
@@ -1290,7 +1295,7 @@ void clock_init(void) {
 // This turns on/off the alarm when the switch has been
 // set. It also displays the alarm time
 void setalarmstate(void) {
-  if (ALARM_PIN & _BV(ALARM)) { 
+  if (ALARM_PIN & _BV(ALARM)) {
     // Don't display the alarm/beep if we already have
     if  (!alarm_on) {
       // alarm on!
@@ -1320,7 +1325,7 @@ void setalarmstate(void) {
 	alarming = 0;
 	TCCR1B &= ~_BV(CS11); // turn it off!
 	PORTB |= _BV(SPK1) | _BV(SPK2);
-      } 
+      }
     }
   }
 }
@@ -1340,13 +1345,13 @@ void speaker_init(void) {
   volume = eeprom_read_byte((uint8_t *)EE_VOLUME);
 
   // We use the built-in fast PWM, 8 bit timer
-  PORTB |= _BV(SPK1) | _BV(SPK2); 
+  PORTB |= _BV(SPK1) | _BV(SPK2);
 
   // Turn on PWM outputs for both pins
   TCCR1A = _BV(COM1B1) | _BV(COM1B0) | _BV(WGM11);
   if (volume) {
     TCCR1A |= _BV(COM1A1);
-  } 
+  }
   TCCR1B = _BV(WGM13) | _BV(WGM12);
 
   // start at 4khz:  250 * 8 multiplier * 4000 = 8mhz
@@ -1380,7 +1385,7 @@ void beep(uint16_t freq, uint8_t times) {
   ICR1 = (F_CPU/8)/freq;
   // we want 50% duty cycle square wave
   OCR1A = OCR1B = ICR1/2;
-   
+
   while (times--) {
     TCCR1B |= _BV(CS11); // turn it on!
     // beeps are 200ms long on
@@ -1411,7 +1416,7 @@ void boost_init(uint8_t brightness) {
     brightness = 30;
 
   if (brightness <= 30) {
-    OCR0A = 30; 
+    OCR0A = 30;
   } else if (brightness <= 35) {
     OCR0A = 35;
   } else if (brightness <= 40) {
@@ -1441,11 +1446,11 @@ void boost_init(uint8_t brightness) {
   }
 
   // fast PWM, set OC0A (boost output pin) on match
-  TCCR0A = _BV(WGM00) | _BV(WGM01);  
+  TCCR0A = _BV(WGM00) | _BV(WGM01);
 
   // Use the fastest clock
   TCCR0B = _BV(CS00);
- 
+
   TCCR0A |= _BV(COM0A1);
   TIMSK0 |= _BV(TOIE0); // turn on the interrupt for muxing
   sei();
@@ -1485,7 +1490,7 @@ void display_date(uint8_t style) {
     uint8_t dotw;
 
     // Calculate day of the week
-    
+
     month = date_m;
     year = 2000 + date_y;
     if (date_m < 3)  {
@@ -1512,7 +1517,7 @@ void display_date(uint8_t style) {
     case 6:
       display_str("saturday"); break;
     }
-    
+
     // wait one seconds about
     delayms(1000);
 
@@ -1546,19 +1551,19 @@ void display_date(uint8_t style) {
     }
     display[7] = pgm_read_byte(numbertable_p + (date_d / 10));
     display[8] = pgm_read_byte(numbertable_p + (date_d % 10));
-    
+
   }
 }
 
 // This displays a time on the clock
 void display_time(uint8_t h, uint8_t m, uint8_t s) {
-  
+
   // seconds and minutes are at the end
   display[8] =  pgm_read_byte(numbertable_p + (s % 10));
   display[7] =  pgm_read_byte(numbertable_p + (s / 10));
   display[6] = 0;
   display[5] =  pgm_read_byte(numbertable_p + (m % 10));
-  display[4] =  pgm_read_byte(numbertable_p + (m / 10)); 
+  display[4] =  pgm_read_byte(numbertable_p + (m / 10));
   display[3] = 0;
 
   // check euro (24h) or US (12h) style time
@@ -1569,7 +1574,7 @@ void display_time(uint8_t h, uint8_t m, uint8_t s) {
     // We use the '*' as an am/pm notice
     if (h >= 12)
       display[0] |= 0x1;  // 'pm' notice
-    else 
+    else
       display[0] &= ~0x1;  // 'pm' notice
   } else {
     display[2] =  pgm_read_byte(numbertable_p + ( (h%24) % 10));
@@ -1578,12 +1583,12 @@ void display_time(uint8_t h, uint8_t m, uint8_t s) {
 }
 
 // Kinda like display_time but just hours and minutes
-void display_alarm(uint8_t h, uint8_t m){ 
+void display_alarm(uint8_t h, uint8_t m){
   display[8] = 0;
   display[7] = 0;
   display[6] = 0;
   display[5] = pgm_read_byte(numbertable_p + (m % 10));
-  display[4] = pgm_read_byte(numbertable_p + (m / 10)); 
+  display[4] = pgm_read_byte(numbertable_p + (m / 10));
   display[3] = 0;
 
   // check euro or US style time
@@ -1606,19 +1611,19 @@ void display_alarm(uint8_t h, uint8_t m){
 }
 
 // Kinda like display_time but just hours and minutes allows negative hours.
-void display_timezone(int8_t h, uint8_t m){ 
+void display_timezone(int8_t h, uint8_t m){
   display[8] = pgm_read_byte(alphatable_p + 'c' - 'a');
   display[7] = pgm_read_byte(alphatable_p + 't' - 'a');
   display[6] = pgm_read_byte(alphatable_p + 'u' - 'a');
   display[5] = pgm_read_byte(numbertable_p + (m % 10));
-  display[4] = pgm_read_byte(numbertable_p + (m / 10)); 
+  display[4] = pgm_read_byte(numbertable_p + (m / 10));
   display[3] = 0;
   display[2] = pgm_read_byte(numbertable_p + (abs(h) % 10));
   display[1] = pgm_read_byte(numbertable_p + (abs(h) / 10));
   // We use the '-' as a negative sign
   if (h >= 0)
     display[0] &= ~0x2;  // positive numbers, implicit sign
-  else 
+  else
     display[0] |= 0x2;  // negative numbers, display negative sign
 
 }
@@ -1661,10 +1666,15 @@ void setdisplay(uint8_t digit, uint8_t segments) {
   uint32_t d = 0;  // we only need 20 bits but 32 will do
   uint8_t i;
 
+  if (digit > lastdigit)
+    {
+      digit = lastdigit;  // hack to display last digit twice
+      segments = display[digit];
+    }
+
   // Set the digit selection pin
   d |= _BV(pgm_read_byte(digittable_p + digit));
 
-  
   // Set the individual segments for this digit
   for (i=0; i<8; i++) {
     if (segments & _BV(i)) {
@@ -1721,7 +1731,7 @@ void getgpstime(void) {
   char *strPointer1;
   char strTime[7];
   char strDate[7];
-  
+
   //If the buffer has not been started because a '$' has not been encountered
   //but a '$' is just now encountered, then start filling the buffer.
   if ( ( 0 == intBufferStatus ) && ( '$' == charReceived ) ) {
@@ -1738,7 +1748,7 @@ void getgpstime(void) {
       intBufferStatus = 0;
       return;
     }
-    //If the buffer has 6 characters in it, it is time to check to see if it is 
+    //If the buffer has 6 characters in it, it is time to check to see if it is
     //the line we are looking for that starts with "$GPRMC"
     else if ( 6 == strlen(strBuffer) ) {
       //If the buffer does contain the characters we are looking for,
@@ -1941,7 +1951,7 @@ void fix_time(void) {
   // an hour...
   if (time_m >= 60) {
     time_m = time_m - 60;
-    time_h++; 
+    time_h++;
     // let's write the time to the EEPROM
     eeprom_write_byte((uint8_t *)EE_HOUR, time_h);
     eeprom_write_byte((uint8_t *)EE_MIN, time_m);
@@ -1949,7 +1959,7 @@ void fix_time(void) {
   // When offsets create negative minutes...
   if (time_m < 0) {
     time_m = 60 + time_m;
-    time_h--; 
+    time_h--;
     eeprom_write_byte((uint8_t *)EE_HOUR, time_h);
     eeprom_write_byte((uint8_t *)EE_MIN, time_m);
   }
@@ -1966,7 +1976,7 @@ void fix_time(void) {
     date_d--;
     eeprom_write_byte((uint8_t *)EE_DAY, date_d);
   }
-  
+
   //if (! sleepmode) {
   //  uart_putw_dec(time_h);
   //  uart_putchar(':');
@@ -1975,7 +1985,7 @@ void fix_time(void) {
   //  uart_putw_dec(time_s);
   //  putstring_nl("");
   //}
-  
+
 
   // a full month!
   // we check the leapyear and date to verify when it's time to roll over months
@@ -2025,7 +2035,7 @@ void fix_time(void) {
 
     eeprom_write_byte((uint8_t *)EE_MONTH, date_m);
   }
-  
+
   // HAPPY NEW YEAR!
   if (date_m >= 13) {
     date_y++;

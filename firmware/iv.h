@@ -58,7 +58,7 @@ THE SOFTWARE.
 #define EE_HOUR 4
 #define EE_MIN 5
 #define EE_SEC 6
-#define EE_ALARM_HOUR 7 
+#define EE_ALARM_HOUR 7
 #define EE_ALARM_MIN 8
 #define EE_BRIGHT 9
 #define EE_VOLUME 10
@@ -202,5 +202,3 @@ void setgpsdate(char* str);
 #define DIG_7 8
 #define DIG_8 7
 #define DIG_9 3
-
-#define nop asm("nop")
